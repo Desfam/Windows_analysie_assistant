@@ -1,0 +1,18 @@
+# .NET
+[Bb]in/
+[Oo]bj/
+*.user
+
+# Frontend
+node_modules/
+frontend/dist/
+
+# Gebautes Frontend im Backend (wird beim Build erzeugt)
+backend/wwwroot/assets/
+
+# Publish-Ausgabe
+publish/
+
+# IDE
+.vs/
+.idea/
