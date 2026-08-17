@@ -7,6 +7,7 @@ export type ExecutionState =
   | 'completed'
   | 'failed'
   | 'skipped'
+  | 'cancelled'
   | 'waitingForApproval'
   | 'waitingForUser'
   | 'blocked'
@@ -95,6 +96,11 @@ export interface ChatMessage {
   text: string
   timestamp: string
   action?: DiagnosisAction
+  streaming?: boolean
+  durationMs?: number
+  error?: string
+  model?: string
+  aborted?: boolean
 }
 
 export interface DiagnosisCase {

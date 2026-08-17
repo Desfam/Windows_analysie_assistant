@@ -1,5 +1,5 @@
 import { motion } from 'framer-motion'
-import { ChevronRight, Repeat } from 'lucide-react'
+import { ChevronRight, Repeat, Sparkles } from 'lucide-react'
 import type { EventItem } from '../../types'
 import { severityStyles } from '../../lib/status'
 import { formatRelativeDay, formatTime } from '../../lib/format'
@@ -9,9 +9,10 @@ interface EventCardProps {
   isNew: boolean
   animate: boolean
   onSelect: (event: EventItem) => void
+  onInvestigate?: (event: EventItem) => void
 }
 
-export function EventCard({ event, isNew, animate, onSelect }: EventCardProps) {
+export function EventCard({ event, isNew, animate, onSelect, onInvestigate }: EventCardProps) {
   const style = severityStyles[event.severity]
   const isCritical = event.severity === 'Critical'
 
@@ -23,14 +24,21 @@ export function EventCard({ event, isNew, animate, onSelect }: EventCardProps) {
       : undefined
 
   return (
-    <motion.button
-      type="button"
+    <motion.div
+      role="button"
+      tabIndex={0}
       layout={animate}
       onClick={() => onSelect(event)}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          onSelect(event)
+        }
+      }}
       initial={animate && isNew ? { opacity: 0, y: -16 } : false}
       animate={{ opacity: 1, y: 0, ...(glow ?? {}) }}
       transition={{ duration: 0.35, boxShadow: { duration: 1.1, repeat: isCritical ? 1 : 0 } }}
-      className={`group w-full rounded-xl border ${style.border} bg-base-700/70 p-4 text-left transition-colors hover:bg-base-600/70`}
+      className={`group w-full cursor-pointer rounded-xl border ${style.border} bg-base-700/70 p-4 text-left transition-colors hover:bg-base-600/70`}
     >
       <div className="flex items-center gap-2 text-xs">
         <span className={`inline-flex items-center gap-1.5 rounded-md px-2 py-0.5 font-semibold uppercase tracking-wide ${style.badge}`}>
@@ -52,13 +60,28 @@ export function EventCard({ event, isNew, animate, onSelect }: EventCardProps) {
 
       <p className="mt-1.5 line-clamp-2 text-sm text-slate-400">{event.summary}</p>
 
-      <div className="mt-3 flex items-center justify-between text-xs text-slate-500">
+      <div className="mt-3 flex items-center justify-between gap-2 text-xs text-slate-500">
         <span className="truncate">
           {event.providerName} · ID {event.eventId} · {event.logName}
         </span>
-        <span className="inline-flex items-center gap-1 text-indigo-300 opacity-0 transition-opacity group-hover:opacity-100">
-          Details <ChevronRight className="h-3.5 w-3.5" />
-        </span>
+        <div className="flex shrink-0 items-center gap-3">
+          {onInvestigate && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation()
+                onInvestigate(event)
+              }}
+              className="inline-flex items-center gap-1 rounded-md border border-violet-500/30 bg-violet-500/10 px-2 py-1 font-medium text-violet-200 transition-colors hover:bg-violet-500/20"
+            >
+              <Sparkles className="h-3.5 w-3.5" />
+              In KI-Diagnose untersuchen
+            </button>
+          )}
+          <span className="inline-flex items-center gap-1 text-indigo-300 opacity-0 transition-opacity group-hover:opacity-100">
+            Details <ChevronRight className="h-3.5 w-3.5" />
+          </span>
+        </div>
       </div>
 
       {event.count > 1 && (
@@ -66,6 +89,7 @@ export function EventCard({ event, isNew, animate, onSelect }: EventCardProps) {
           {event.count}× aufgetreten · zuerst {formatTime(event.firstSeen)}, zuletzt {formatTime(event.lastSeen)}
         </p>
       )}
-    </motion.button>
+    </motion.div>
   )
 }
+

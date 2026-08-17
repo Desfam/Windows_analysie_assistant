@@ -15,6 +15,7 @@ interface EventsPanelProps {
   animate: boolean
   onFilterChange: (partial: Partial<EventFilterState>) => void
   onSelect: (event: EventItem) => void
+  onInvestigate?: (event: EventItem) => void
 }
 
 export function EventsPanel({
@@ -25,7 +26,8 @@ export function EventsPanel({
   filters,
   animate,
   onFilterChange,
-  onSelect
+  onSelect,
+  onInvestigate
 }: EventsPanelProps) {
   const events = data?.events ?? []
 
@@ -74,6 +76,7 @@ export function EventsPanel({
                 isNew={newKeys.has(event.eventKey)}
                 animate={animate}
                 onSelect={onSelect}
+                onInvestigate={onInvestigate}
               />
             ))}
           </AnimatePresence>

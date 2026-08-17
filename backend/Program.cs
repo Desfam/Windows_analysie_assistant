@@ -30,6 +30,7 @@ builder.WebHost.UseUrls(Url);
 
 builder.Services.Configure<ThresholdOptions>(builder.Configuration.GetSection(ThresholdOptions.SectionName));
 builder.Services.Configure<EventOptions>(builder.Configuration.GetSection(EventOptions.SectionName));
+builder.Services.Configure<OllamaOptions>(builder.Configuration.GetSection(OllamaOptions.SectionName));
 
 builder.Services.ConfigureHttpJsonOptions(options =>
 {
@@ -47,12 +48,20 @@ builder.Services.AddSingleton<EventQueryParser>();
 builder.Services.AddSingleton<ISystemInfoService, SystemInfoService>();
 builder.Services.AddSingleton<IEventLogService, EventLogService>();
 
+builder.Services.AddHttpClient("ollama");
+builder.Services.AddSingleton<OllamaConfigStore>();
+builder.Services.AddSingleton<IOllamaService, OllamaService>();
+builder.Services.AddSingleton<DiagnosticActionCatalog>();
+builder.Services.AddSingleton<IDiagnosticActionExecutor, DiagnosticActionExecutor>();
+builder.Services.AddSingleton<IDiagnosticAgentService, DiagnosticAgentService>();
+
 var app = builder.Build();
 
 app.UseMiddleware<GlobalExceptionMiddleware>();
 app.UseMiddleware<SessionTokenMiddleware>();
 
 app.MapApiEndpoints();
+app.MapOllamaEndpoints();
 app.MapFrontend(sessionToken);
 
 app.Lifetime.ApplicationStarted.Register(() =>

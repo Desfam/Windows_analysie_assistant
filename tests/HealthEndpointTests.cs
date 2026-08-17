@@ -36,6 +36,19 @@ public sealed class HealthEndpointTests : IClassFixture<HealthEndpointTests.Test
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
 
+    [Theory]
+    [InlineData("/api/ollama/status")]
+    [InlineData("/api/ollama/models")]
+    [InlineData("/api/ollama/config")]
+    public async Task OllamaEndpoints_WithoutToken_AreProtectedInProduction(string path)
+    {
+        var client = _factory.CreateClient();
+
+        var response = await client.GetAsync(path);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
     public sealed class TestAppFactory : WebApplicationFactory<Program>
     {
         public TestAppFactory()

@@ -5,7 +5,7 @@ import react from '@vitejs/plugin-react'
 // damit die veröffentlichte EXE es als statische Weboberfläche ausliefern kann.
 export default defineConfig({
   plugins: [react()],
-  base: './',
+  base: '/',
   server: {
     port: 5173,
     strictPort: true,

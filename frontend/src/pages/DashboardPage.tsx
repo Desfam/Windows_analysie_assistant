@@ -11,7 +11,11 @@ import { useEventsData } from '../hooks/useEventsData'
 import type { EventItem } from '../types'
 import type { EventQueryParams } from '../services/api'
 
-export function DashboardPage() {
+interface DashboardPageProps {
+  onInvestigate?: (event: EventItem) => void
+}
+
+export function DashboardPage({ onInvestigate }: DashboardPageProps = {}) {
   const { settings, update, animationsEnabled } = useSettings()
   const [filters, setFilters] = useState<EventFilterState>(defaultFilters)
   const [selectedEvent, setSelectedEvent] = useState<EventItem | null>(null)
@@ -73,6 +77,7 @@ export function DashboardPage() {
           animate={animationsEnabled}
           onFilterChange={handleFilterChange}
           onSelect={setSelectedEvent}
+          onInvestigate={onInvestigate}
         />
       </main>
 

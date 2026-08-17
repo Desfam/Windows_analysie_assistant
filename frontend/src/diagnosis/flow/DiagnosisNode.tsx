@@ -25,7 +25,6 @@ function DiagnosisNodeComponent({ data, selected }: NodeProps<DiagnosisNodeType>
   const style = stateStyles[data.state]
   const Icon = kind.icon
   const isRunning = data.state === 'running'
-  const isDecision = data.kind === 'decision'
 
   return (
     <motion.div

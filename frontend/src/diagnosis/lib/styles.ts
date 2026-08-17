@@ -65,6 +65,13 @@ export const stateStyles: Record<ExecutionState, StateStyle> = {
     bg: 'bg-slate-500/5',
     dot: 'bg-slate-500'
   },
+  cancelled: {
+    label: 'Abgebrochen',
+    text: 'text-amber-300',
+    border: 'border-amber-500/30 border-dashed',
+    bg: 'bg-amber-500/5',
+    dot: 'bg-amber-400'
+  },
   waitingForApproval: {
     label: 'Bestätigung nötig',
     text: 'text-orange-300',
@@ -151,6 +158,7 @@ export const stateIcons: Record<ExecutionState, LucideIcon> = {
   completed: CheckCircle2,
   failed: AlertTriangle,
   skipped: CircleDashed,
+  cancelled: CircleDashed,
   waitingForApproval: ShieldQuestion,
   waitingForUser: MessageCircleQuestion,
   blocked: AlertTriangle
