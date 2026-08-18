@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { MessageSquare, Paperclip, SendHorizontal, Square } from 'lucide-react'
-import type { ChatMessage as ChatMessageType, DiagnosisAction } from '../types'
+import type { AgentStatus, ChatMessage as ChatMessageType, DiagnosisAction } from '../types'
 import { ChatMessage } from './ChatMessage'
 
 interface DiagnosisChatProps {
@@ -8,12 +8,12 @@ interface DiagnosisChatProps {
   animate: boolean
   canSend: boolean
   isStreaming: boolean
+  status: AgentStatus | null
   disabledReason?: string
   onSend: (text: string) => void
   onCancel: () => void
   onShowCommand: (action: DiagnosisAction) => void
   onSkip: (action: DiagnosisAction) => void
-  onRun: (action: DiagnosisAction) => void
 }
 
 export function DiagnosisChat({
@@ -21,12 +21,12 @@ export function DiagnosisChat({
   animate,
   canSend,
   isStreaming,
+  status,
   disabledReason,
   onSend,
   onCancel,
   onShowCommand,
   onSkip,
-  onRun
 }: DiagnosisChatProps) {
   const [draft, setDraft] = useState('')
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -83,10 +83,10 @@ export function DiagnosisChat({
           <ChatMessage
             key={message.id}
             message={message}
+            status={status}
             animate={animate}
             onShowCommand={onShowCommand}
             onSkip={onSkip}
-            onRun={onRun}
           />
         ))}
       </div>

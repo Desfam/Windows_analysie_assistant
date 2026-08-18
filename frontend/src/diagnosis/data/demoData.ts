@@ -22,7 +22,7 @@ export const eventsAction: DiagnosisAction = {
   risk: 'R1',
   estimatedDuration: 'ca. 10 Sekunden',
   note: 'Es werden nur Protokolle gelesen. Am System wird nichts verändert.',
-  demoCommand:
+  command:
     "Get-WinEvent -FilterHashtable @{ LogName='System'; Level=1,2,3;\n" +
     '  StartTime=(Get-Date).AddHours(-24) } |\n' +
     '  Where-Object { $_.Id -in 41,1001,129,6008 } |\n' +
@@ -93,7 +93,7 @@ export const initialNodes: SeedNode[] = [
       risk: 'R1',
       systemImpact: readOnlyImpact,
       estimatedDuration: 'ca. 10 Sekunden',
-      demoCommand: eventsAction.demoCommand,
+      demoCommand: eventsAction.command,
       reason:
         'Freezes hinterlassen häufig Spuren in den Windows-Ereignissen (z. B. Kernel-, ' +
         'Treiber- oder Speicherfehler). Diese Belege grenzen die Ursache ein.',

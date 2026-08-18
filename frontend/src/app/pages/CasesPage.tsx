@@ -1,5 +1,5 @@
 import { useNavigate } from 'react-router-dom'
-import { FlaskConical, FolderKanban, MessageSquare, Network, Plus } from 'lucide-react'
+import { FolderKanban, MessageSquare, Network, Plus } from 'lucide-react'
 import { useCases } from '../cases/CasesContext'
 import { useOllama } from '../ollama/OllamaContext'
 import type { CaseStatus } from '../cases/casesTypes'
@@ -13,8 +13,8 @@ const statusMeta: Record<CaseStatus, { label: string; className: string }> = {
 }
 
 export function CasesPage() {
-  const { cases, activeId, selectCase, createCase, loadDemoCase } = useCases()
-  const { selectedModel, settings } = useOllama()
+  const { cases, activeId, selectCase, createCase } = useCases()
+  const { selectedModel } = useOllama()
   const navigate = useNavigate()
 
   const openCase = (id: string) => {
@@ -23,16 +23,7 @@ export function CasesPage() {
   }
 
   const startNewCase = () => {
-    if (settings.useDemoDataForNewCases) {
-      loadDemoCase(selectedModel)
-    } else {
-      createCase('Neuer Diagnosefall', selectedModel)
-    }
-    navigate('/diagnosis')
-  }
-
-  const startDemoCase = () => {
-    loadDemoCase(selectedModel)
+    createCase('Neuer Diagnosefall', selectedModel)
     navigate('/diagnosis')
   }
 
@@ -48,14 +39,6 @@ export function CasesPage() {
             <p className="text-sm text-slate-500">Laufende und abgeschlossene Untersuchungen</p>
           </div>
         </div>
-        <button
-          type="button"
-          onClick={startDemoCase}
-          className="inline-flex items-center gap-1.5 rounded-lg border border-violet-500/30 bg-violet-500/10 px-3 py-2 text-sm font-medium text-violet-200 hover:bg-violet-500/20"
-        >
-          <FlaskConical className="h-4 w-4" />
-          Demo-Fall laden
-        </button>
         <button
           type="button"
           onClick={startNewCase}
@@ -89,12 +72,6 @@ export function CasesPage() {
                       {meta.label}
                     </span>
                   </div>
-                  {item.isDemo && (
-                    <span className="mt-1.5 inline-flex items-center gap-1 rounded-md border border-violet-500/25 bg-violet-500/10 px-2 py-0.5 text-[11px] font-medium text-violet-200">
-                      <FlaskConical className="h-3 w-3" />
-                      Demo-Fall
-                    </span>
-                  )}
                   <p className="mt-1 text-xs text-slate-500">
                     Modell: {item.modelName ?? 'nicht gewählt'}
                   </p>

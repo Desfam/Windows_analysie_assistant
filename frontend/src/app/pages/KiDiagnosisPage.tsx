@@ -4,10 +4,56 @@ import { DiagnosisChat } from '../../diagnosis/components/DiagnosisChat'
 import { CaseOverview } from '../../diagnosis/components/CaseOverview'
 import { CommandDetailsDialog } from '../../diagnosis/components/CommandDetailsDialog'
 import { usePrefersReducedMotion } from '../../diagnosis/lib/styles'
-import type { DiagnosisAction, DiagnosisCase as CaseInfo } from '../../diagnosis/types'
+import type { AgentStatus, DiagnosisAction, DiagnosisCase as CaseInfo } from '../../diagnosis/types'
 import { useCases, nextMessageId } from '../cases/CasesContext'
 import { useOllama } from '../ollama/OllamaContext'
 import { runAgentChat, type AgentEvent, type OllamaChatMessage } from '../ollama/ollamaApi'
+
+const actionDetails: Record<string, Omit<DiagnosisAction, 'id' | 'state' | 'targetNodeId'>> = {
+  'events.query': {
+    title: 'Windows-Ereignisse untersuchen',
+    description: 'Ereignisprotokolle nach Fehlern und Warnungen durchsuchen.',
+    systemImpact: { changesSystem: false, label: 'Keine Systemänderung' }, risk: 'R0',
+    estimatedDuration: 'ca. 10 Sekunden', note: 'Es werden nur Protokolle gelesen. Am System wird nichts verändert.',
+    command: 'Serverseitige, validierte Ereignisabfrage'
+  },
+  'winget.status': {
+    title: 'Winget-Status prüfen', description: 'Verfügbarkeit, Version und Aufrufbarkeit von winget prüfen.',
+    systemImpact: { changesSystem: false, label: 'Keine Systemänderung' }, risk: 'R0',
+    estimatedDuration: 'ca. 5 Sekunden', note: 'Es wird ausschließlich der Status von winget gelesen.',
+    command: 'winget.exe --version'
+  },
+  'winget.sources.list': {
+    title: 'Winget-Quellen prüfen', description: 'Konfigurierte Quellen und erkennbare Quellenfehler lesen.',
+    systemImpact: { changesSystem: false, label: 'Keine Systemänderung' }, risk: 'R0',
+    estimatedDuration: 'ca. 10 Sekunden', note: 'Quellen werden nur angezeigt, nicht zurückgesetzt oder verändert.',
+    command: 'winget.exe source list'
+  },
+  'appinstaller.status': {
+    title: 'App Installer prüfen', description: 'Installations- und Paketstatus von Microsoft.DesktopAppInstaller lesen.',
+    systemImpact: { changesSystem: false, label: 'Keine Systemänderung' }, risk: 'R0',
+    estimatedDuration: 'ca. 5 Sekunden', note: 'Die Paketregistrierung wird nur abgefragt.',
+    command: 'Get-AppxPackage Microsoft.DesktopAppInstaller'
+  },
+  'windowsupdate.status': {
+    title: 'Windows Update prüfen', description: 'Updatezustand und einen ausstehenden Neustart prüfen.',
+    systemImpact: { changesSystem: false, label: 'Keine Systemänderung' }, risk: 'R0',
+    estimatedDuration: 'ca. 5 Sekunden', note: 'Dienste werden nicht gestartet, beendet oder verändert.',
+    command: 'Serverseitige Statusprüfung'
+  },
+  'storage.summary': {
+    title: 'Datenträgerstatus prüfen', description: 'Lokale Datenträger und den freien Speicher zusammenfassen.',
+    systemImpact: { changesSystem: false, label: 'Keine Systemänderung' }, risk: 'R0',
+    estimatedDuration: 'ca. 5 Sekunden', note: 'Es werden nur Datenträgerinformationen gelesen.',
+    command: 'Serverseitige Datenträgerabfrage'
+  },
+  'network.microsoftEndpoints': {
+    title: 'Microsoft-Endpunkte prüfen', description: 'DNS-Auflösung der erforderlichen Microsoft-Endpunkte prüfen.',
+    systemImpact: { changesSystem: false, label: 'Keine Systemänderung' }, risk: 'R0',
+    estimatedDuration: 'ca. 5 Sekunden', note: 'Kein Portscan und keine Netzwerkkonfiguration werden ausgeführt.',
+    command: 'DNS-Auflösung fester Microsoft-Endpunkte'
+  }
+}
 
 const statusLabels: Record<string, string> = {
   open: 'Offen',
@@ -26,12 +72,13 @@ export function KiDiagnosisPage() {
     addMessage,
     appendToMessage,
     updateMessage,
-    runEventsDemo,
     skipAction,
     addProblemNode,
     agentAddNode,
     agentPatchNode,
-    agentAddEvidence
+    agentAddEvidence,
+    setActionState,
+    setActionResult
   } = useCases()
   const { selectedModel, phase } = useOllama()
   const animate = !usePrefersReducedMotion()
@@ -39,6 +86,7 @@ export function KiDiagnosisPage() {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
   const [commandAction, setCommandAction] = useState<DiagnosisAction | null>(null)
   const [isStreaming, setIsStreaming] = useState(false)
+  const [agentStatus, setAgentStatus] = useState<AgentStatus | null>(null)
   const controllerRef = useRef<AbortController | null>(null)
   const assistantIdRef = useRef<string | null>(null)
 
@@ -62,8 +110,9 @@ export function KiDiagnosisPage() {
 
   const now = () => new Date().toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })
 
-  const finishStreaming = () => {
+  const finishStreaming = (phase = 'completed', title = 'Diagnose abgeschlossen') => {
     setIsStreaming(false)
+    setAgentStatus({ phase, title, description: '', startedAt: Date.now() })
     controllerRef.current = null
   }
 
@@ -76,9 +125,36 @@ export function KiDiagnosisPage() {
         updateMessage(assistantId, { streaming: false, durationMs: event.durationMs })
         finishStreaming()
         break
+      case 'agent.status':
+        if (event.phase && event.title && event.description) {
+          setAgentStatus({ phase: event.phase, title: event.title, description: event.description, startedAt: Date.now() })
+        }
+        break
       case 'graph.nodeAdded':
         if (event.node) agentAddNode(event.node)
         break
+      case 'action.proposed': {
+        const definition = event.actionId ? actionDetails[event.actionId] : undefined
+        if (definition && event.executionId) {
+          addMessage({
+            id: nextMessageId(), role: 'assistant', text: '', timestamp: now(),
+            action: { ...definition, id: event.executionId, state: 'ready', targetNodeId: event.nodeId ?? '' }
+          })
+        }
+        break
+      }
+      case 'action.started':
+        if (event.executionId) setActionState(event.executionId, 'running')
+        break
+      case 'action.completed': {
+        const terminalState = event.actionState === 'cancelled' ? 'cancelled' : event.result?.success ? 'completed' : 'failed'
+        if (event.executionId && event.result?.execution) {
+          setActionResult(event.executionId, terminalState, event.result.execution, event.result.error)
+        } else if (event.executionId) {
+          setActionState(event.executionId, terminalState)
+        }
+        break
+      }
       case 'graph.nodeUpdated':
         if (event.nodePatch) agentPatchNode(event.nodePatch)
         break
@@ -94,7 +170,7 @@ export function KiDiagnosisPage() {
           streaming: false,
           error: event.message ?? 'Die Anfrage ist fehlgeschlagen.'
         })
-        finishStreaming()
+        finishStreaming(event.code === 'timeout' ? 'timeout' : 'failed', event.message ?? 'Diagnose fehlgeschlagen')
         break
       default:
         break
@@ -130,6 +206,7 @@ export function KiDiagnosisPage() {
     const controller = new AbortController()
     controllerRef.current = controller
     setIsStreaming(true)
+    setAgentStatus({ phase: 'understanding', title: 'Problem wird analysiert', description: 'Die Anfrage wird für die Diagnose eingeordnet.', startedAt: Date.now() })
 
     const caseContext = {
       currentEvidence: activeCase.evidence.map(
@@ -150,6 +227,7 @@ export function KiDiagnosisPage() {
       updateMessage(assistantIdRef.current, { streaming: false, aborted: true })
     }
     setIsStreaming(false)
+    setAgentStatus({ phase: 'cancelled', title: 'Diagnose abgebrochen', description: '', startedAt: Date.now() })
   }
 
   const chat = (
@@ -158,12 +236,12 @@ export function KiDiagnosisPage() {
       animate={animate}
       canSend={canSend}
       isStreaming={isStreaming}
+      status={agentStatus}
       disabledReason={disabledReason}
       onSend={handleSend}
       onCancel={handleCancel}
       onShowCommand={setCommandAction}
       onSkip={(action) => skipAction(action.id, action.targetNodeId)}
-      onRun={() => runEventsDemo()}
     />
   )
 

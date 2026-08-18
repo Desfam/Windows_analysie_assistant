@@ -19,6 +19,20 @@ public sealed class DiagnosticActionExecutorTests
             Task.FromResult<EventItem?>(null);
     }
 
+    private sealed class FakeProcessRunner : ISafeProcessRunner
+    {
+        public Task<ProcessExecutionDetails> RunAsync(SafeProcessRequest request, CancellationToken cancellationToken) =>
+            Task.FromResult(new ProcessExecutionDetails
+            {
+                Program = request.Program,
+                Arguments = request.Arguments.ToList(),
+                StartedAt = DateTimeOffset.Now,
+                CompletedAt = DateTimeOffset.Now,
+                ExitCode = -1,
+                StartError = "Nicht für diese Testaktion verwendet."
+            });
+    }
+
     private static EventItem MakeEvent(int id, string provider, EventSeverity severity, string message) => new()
     {
         Id = $"{provider}-{id}",
@@ -32,7 +46,7 @@ public sealed class DiagnosticActionExecutorTests
     };
 
     private static DiagnosticActionExecutor CreateExecutor(EventsResponse response) =>
-        new(new FakeEventLogService(response), NullLogger<DiagnosticActionExecutor>.Instance);
+        new(new FakeEventLogService(response), new FakeProcessRunner(), NullLogger<DiagnosticActionExecutor>.Instance);
 
     [Fact]
     public async Task EventsQuery_ReturnsRealEvents_NoDemoData()

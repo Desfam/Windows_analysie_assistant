@@ -24,7 +24,16 @@ public sealed class DiagnosticActionCatalog
     public DiagnosticActionCatalog(IOptions<EventOptions> eventOptions)
     {
         _eventOptions = eventOptions.Value;
-        _definitions = new List<DiagnosticActionDefinition> { BuildEventsQueryDefinition() };
+        _definitions = new List<DiagnosticActionDefinition>
+        {
+            BuildEventsQueryDefinition(),
+            BuildReadOnlyDefinition("winget.status", "Winget-Status prüfen", "Prüft Vorhandensein, Pfad, Version und Aufrufbarkeit von winget.", "winget"),
+            BuildReadOnlyDefinition("winget.sources.list", "Winget-Quellen prüfen", "Liest die konfigurierten Winget-Quellen und erkennbare Quellenfehler.", "winget"),
+            BuildReadOnlyDefinition("appinstaller.status", "App Installer prüfen", "Liest den Installations- und Paketstatus von Microsoft.DesktopAppInstaller.", "appinstaller"),
+            BuildReadOnlyDefinition("windowsupdate.status", "Windows Update prüfen", "Liest Dienstzustände, ausstehenden Neustart und bekannte Updatehinweise.", "windowsupdate"),
+            BuildReadOnlyDefinition("storage.summary", "Datenträgerstatus prüfen", "Liest erkannte lokale Datenträger und freien Speicher.", "system"),
+            BuildReadOnlyDefinition("network.microsoftEndpoints", "Microsoft-Endpunkte prüfen", "Prüft DNS-Auflösung fest definierter Microsoft- und Winget-Endpunkte.", "network")
+        };
     }
 
     public IReadOnlyList<DiagnosticActionDefinition> Definitions => _definitions;
@@ -58,8 +67,20 @@ public sealed class DiagnosticActionCatalog
         return actionId switch
         {
             "events.query" => ValidateEventsQuery(definition, parameters),
+            "winget.status" or "winget.sources.list" or "appinstaller.status" or "windowsupdate.status" or
+            "storage.summary" or "network.microsoftEndpoints" => ValidateEmptyParameters(definition, parameters),
             _ => Invalid($"Aktion „{actionId}“ ist noch nicht implementiert.")
         };
+    }
+
+    private static ActionValidationResult ValidateEmptyParameters(DiagnosticActionDefinition definition, JsonElement parameters)
+    {
+        if (parameters.ValueKind != JsonValueKind.Object || parameters.EnumerateObject().Any())
+        {
+            return Invalid("Diese fest verdrahtete Aktion akzeptiert keine Parameter.");
+        }
+
+        return new ActionValidationResult { IsValid = true, Definition = definition, Parameters = new EmptyDiagnosticParameters() };
     }
 
     private ActionValidationResult ValidateEventsQuery(DiagnosticActionDefinition definition, JsonElement parameters)
@@ -251,4 +272,24 @@ public sealed class DiagnosticActionCatalog
             ParameterSchema = schema
         };
     }
+
+    private static DiagnosticActionDefinition BuildReadOnlyDefinition(string actionId, string title, string description, string category) =>
+        new()
+        {
+            ActionId = actionId,
+            Title = title,
+            Description = description + " Verändert das System nicht.",
+            Category = category,
+            RiskLevel = ActionRiskLevel.R0,
+            ChangesSystem = false,
+            RequiresAdministrator = false,
+            RequiresConfirmation = false,
+            TimeoutSeconds = 20,
+            ParameterSchema = JsonSerializer.SerializeToElement(new
+            {
+                type = "object",
+                properties = new { },
+                additionalProperties = false
+            })
+        };
 }

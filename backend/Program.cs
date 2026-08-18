@@ -48,10 +48,14 @@ builder.Services.AddSingleton<EventQueryParser>();
 builder.Services.AddSingleton<ISystemInfoService, SystemInfoService>();
 builder.Services.AddSingleton<IEventLogService, EventLogService>();
 
-builder.Services.AddHttpClient("ollama");
+builder.Services.AddHttpClient("ollama", client =>
+{
+    client.Timeout = Timeout.InfiniteTimeSpan;
+});
 builder.Services.AddSingleton<OllamaConfigStore>();
 builder.Services.AddSingleton<IOllamaService, OllamaService>();
 builder.Services.AddSingleton<DiagnosticActionCatalog>();
+builder.Services.AddSingleton<ISafeProcessRunner, SafeProcessRunner>();
 builder.Services.AddSingleton<IDiagnosticActionExecutor, DiagnosticActionExecutor>();
 builder.Services.AddSingleton<IDiagnosticAgentService, DiagnosticAgentService>();
 

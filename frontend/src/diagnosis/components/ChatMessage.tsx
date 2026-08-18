@@ -1,20 +1,31 @@
 import { Bot, User, AlertCircle, Loader2 } from 'lucide-react'
 import { motion } from 'framer-motion'
-import type { ChatMessage as ChatMessageType, DiagnosisAction } from '../types'
+import type { AgentStatus, ChatMessage as ChatMessageType, DiagnosisAction } from '../types'
 import { ActionCard } from './ActionCard'
 import { Markdown } from '../../app/components/Markdown'
 
+function sanitizeVisibleText(text: string): string {
+  let result = text
+  for (const tag of ['think', 'analysis', 'reasoning']) {
+    result = result.replace(new RegExp(`<${tag}\\b[^>]*>[\\s\\S]*?</${tag}\\s*>`, 'gi'), '')
+    result = result.replace(new RegExp(`[\\s\\S]*?</${tag}\\s*>`, 'i'), '')
+    result = result.replace(new RegExp(`<${tag}\\b[^>]*>[\\s\\S]*$`, 'i'), '')
+  }
+  return result.replace(/\n\s*\n\s*\n+/g, '\n\n').trim()
+}
+
 interface ChatMessageProps {
   message: ChatMessageType
+  status: AgentStatus | null
   animate: boolean
   onShowCommand: (action: DiagnosisAction) => void
   onSkip: (action: DiagnosisAction) => void
-  onRun: (action: DiagnosisAction) => void
 }
 
-export function ChatMessage({ message, animate, onShowCommand, onSkip, onRun }: ChatMessageProps) {
+export function ChatMessage({ message, status, animate, onShowCommand, onSkip }: ChatMessageProps) {
   const isUser = message.role === 'user'
-  const showTypingDots = message.streaming && message.text.length === 0
+  const visibleText = isUser ? message.text : sanitizeVisibleText(message.text)
+  const showTypingDots = message.streaming && visibleText.length === 0
 
   return (
     <motion.div
@@ -44,11 +55,11 @@ export function ChatMessage({ message, animate, onShowCommand, onSkip, onRun }: 
           ) : showTypingDots ? (
             <span className="inline-flex items-center gap-1.5 text-slate-400">
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              Antwort wird erzeugt …
+              {status?.title ?? 'Problem wird analysiert'} …
             </span>
           ) : (
             <div className="text-left">
-              <Markdown content={message.text} />
+              <Markdown content={visibleText} />
               {message.streaming && (
                 <span className="ml-0.5 inline-block h-3.5 w-1.5 animate-pulse bg-slate-400 align-middle" />
               )}
@@ -78,7 +89,6 @@ export function ChatMessage({ message, animate, onShowCommand, onSkip, onRun }: 
               action={message.action}
               onShowCommand={onShowCommand}
               onSkip={onSkip}
-              onRun={onRun}
             />
           </div>
         )}

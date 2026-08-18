@@ -16,7 +16,7 @@ function nodeWidth(kind: NodeKind): number {
     case 'completion':
       return 240
     default:
-      return 250
+      return 230
   }
 }
 
@@ -29,12 +29,12 @@ function DiagnosisNodeComponent({ data, selected }: NodeProps<DiagnosisNodeType>
   return (
     <motion.div
       initial={{ opacity: 0, scale: 0.9 }}
-      animate={{ opacity: data.state === 'skipped' ? 0.55 : 1, scale: 1 }}
+      animate={{ opacity: data.state === 'skipped' ? 0.45 : data.state === 'pending' ? 0.58 : 1, scale: 1 }}
       transition={{ duration: 0.3 }}
       style={{ width: nodeWidth(data.kind) }}
-      className={`relative rounded-xl border bg-base-700/95 px-3.5 py-3 shadow-card transition-colors ${style.border} ${
+      className={`relative rounded-lg border bg-base-700/95 px-3.5 py-3 shadow-card transition-colors ${style.border} ${
         selected ? 'ring-2 ring-blue-400/70' : ''
-      } ${data.state === 'skipped' ? 'border-dashed' : ''}`}
+      } ${data.state === 'pending' || data.state === 'skipped' ? 'border-dashed' : ''}`}
     >
       {isRunning && (
         <motion.span

@@ -104,4 +104,31 @@ public sealed class DiagnosticActionCatalogTests
         Assert.Equal(ActionRiskLevel.R0, definition.RiskLevel);
         Assert.False(definition.RequiresAdministrator);
     }
+
+    [Theory]
+    [InlineData("winget.status")]
+    [InlineData("winget.sources.list")]
+    [InlineData("appinstaller.status")]
+    [InlineData("windowsupdate.status")]
+    [InlineData("storage.summary")]
+    [InlineData("network.microsoftEndpoints")]
+    public void Catalog_ExposesFixedReadOnlyDiagnosticsWithoutParameters(string actionId)
+    {
+        var result = CreateCatalog().ValidateCall(actionId, Json("{}"));
+
+        Assert.True(result.IsValid);
+        Assert.NotNull(result.Definition);
+        Assert.Equal(ActionRiskLevel.R0, result.Definition!.RiskLevel);
+        Assert.False(result.Definition.ChangesSystem);
+        Assert.False(result.Definition.RequiresConfirmation);
+        Assert.IsType<EmptyDiagnosticParameters>(result.Parameters);
+    }
+
+    [Fact]
+    public void Catalog_RejectsParametersForFixedDiagnostics()
+    {
+        var result = CreateCatalog().ValidateCall("winget.status", Json("{ \"command\": \"winget source reset\" }"));
+
+        Assert.False(result.IsValid);
+    }
 }

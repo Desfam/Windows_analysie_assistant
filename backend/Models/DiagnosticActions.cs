@@ -76,6 +76,16 @@ public sealed class EventsQueryActionResult
     public EventsQuerySummary Summary { get; init; } = new();
 }
 
+/// <summary>Parameterloser Marker für fest verdrahtete, lesende Diagnoseaktionen.</summary>
+public sealed class EmptyDiagnosticParameters;
+
+/// <summary>Strukturiertes Ergebnis einer sicheren Statusprüfung.</summary>
+public sealed class DiagnosticStatusActionResult
+{
+    public required string Summary { get; init; }
+    public Dictionary<string, object?> Values { get; init; } = new(StringComparer.OrdinalIgnoreCase);
+}
+
 /// <summary>
 /// Ergebnis der tatsächlichen Backend-Ausführung einer Aktion. Nur die Anwendung erzeugt
 /// dieses Objekt – niemals das Modell.
@@ -88,4 +98,5 @@ public sealed class ActionExecutionResult
     public DateTimeOffset CompletedAt { get; init; }
     public object? Data { get; init; }
     public string? Error { get; init; }
+    public ProcessExecutionDetails? Execution { get; init; }
 }

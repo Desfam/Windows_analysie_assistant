@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using System.Text;
 using System.Text.Json;
 using WindowsDiagnosticApp.Models;
 
@@ -45,6 +46,8 @@ public sealed class DiagnosticAgentService : IDiagnosticAgentService
         var messageId = Guid.NewGuid().ToString("n");
         var iteration = 0;
 
+        yield return Status("understanding", "Problem wird analysiert", "Die Anfrage wird für die Diagnose eingeordnet.");
+
         while (true)
         {
             iteration++;
@@ -56,6 +59,9 @@ public sealed class DiagnosticAgentService : IDiagnosticAgentService
 
             List<ToolCallRaw>? toolCalls = null;
             string? modelError = null;
+            var content = new AssistantContentBuffer();
+
+            yield return Status("planning", "Diagnoseschritt wird geplant", "Der nächste sichere Diagnoseschritt wird bestimmt.");
 
             await foreach (var raw in _ollama.StreamRawAsync(request.Model!, messages, tools, cancellationToken))
             {
@@ -73,7 +79,7 @@ public sealed class DiagnosticAgentService : IDiagnosticAgentService
 
                 if (raw.Type == "delta" && !string.IsNullOrEmpty(raw.Content))
                 {
-                    yield return new AgentEvent { Type = "assistant.delta", Content = raw.Content };
+                    content.Append(raw.Content);
                 }
 
                 if (raw.Type == "done")
@@ -88,8 +94,49 @@ public sealed class DiagnosticAgentService : IDiagnosticAgentService
                 yield break;
             }
 
+            var hasNativeToolCalls = toolCalls is { Count: > 0 };
+            if (hasNativeToolCalls)
+            {
+                content.Discard();
+            }
+            else
+            {
+                var rawText = content.TakePending();
+                var sanitized = ModelOutputSanitizer.Sanitize(rawText);
+                if (sanitized.HadThinkingContent)
+                {
+                    yield return Status("evaluating", "Ergebnisse werden ausgewertet", "Die gefundenen Systeminformationen werden für den nächsten Diagnoseschritt eingeordnet.");
+                }
+
+                var pending = sanitized.Text;
+                if (!string.IsNullOrWhiteSpace(pending))
+                {
+                    var parsed = TextToolCallParser.Parse(pending);
+                    switch (parsed.Outcome)
+                    {
+                        case TextToolCallOutcome.Parsed:
+                            toolCalls = new List<ToolCallRaw> { parsed.Call! };
+                            break;
+
+                        case TextToolCallOutcome.Invalid:
+                            yield return Error("invalid_tool_call", parsed.Error!);
+                            break;
+
+                        default:
+                            yield return new AgentEvent { Type = "assistant.delta", Content = pending };
+                            break;
+                    }
+                }
+                else if (sanitized.HasIncompleteThinkingBlock || content.IsEmpty())
+                {
+                    yield return Error("model_no_result", "Das Modell hat keine finale Antwort geliefert.");
+                    yield break;
+                }
+            }
+
             if (toolCalls is null || toolCalls.Count == 0)
             {
+                yield return Status("completed", "Abschließende Antwort wird erstellt", "Die finale Antwort wird vorbereitet.");
                 yield return new AgentEvent { Type = "assistant.completed", MessageId = messageId };
                 yield break;
             }
@@ -99,8 +146,13 @@ public sealed class DiagnosticAgentService : IDiagnosticAgentService
             var userCancelled = false;
             foreach (var call in toolCalls)
             {
+                ActionExecutionResult? actionResult = null;
                 await foreach (var evt in HandleToolCallAsync(call, messages, cancellationToken))
                 {
+                    if (evt.Type == "action.completed" && evt.Result is ActionExecutionResult result)
+                    {
+                        actionResult = result;
+                    }
                     yield return evt;
                 }
 
@@ -108,6 +160,18 @@ public sealed class DiagnosticAgentService : IDiagnosticAgentService
                 {
                     userCancelled = true;
                     break;
+                }
+
+                // Ein erfolgreicher Winget-Status beantwortet weder die Quellenfrage noch beweist er
+                // die Erreichbarkeit. Der zweite, parameterlose R0-Schritt ist daher serverseitig fest.
+                if (call.Name == "winget.status" && actionResult?.Success == true)
+                {
+                    var sourcesCall = new ToolCallRaw { Name = "winget.sources.list", Arguments = EmptyObjectArguments() };
+                    messages.Add(BuildAssistantToolCallMessage(new List<ToolCallRaw> { sourcesCall }));
+                    await foreach (var evt in HandleToolCallAsync(sourcesCall, messages, cancellationToken))
+                    {
+                        yield return evt;
+                    }
                 }
             }
 
@@ -126,7 +190,7 @@ public sealed class DiagnosticAgentService : IDiagnosticAgentService
         {
             var error = validation.Error ?? "Die angeforderte Aktion ist nicht zulässig.";
             yield return Error("invalid_tool_call", error);
-            messages.Add(BuildToolResultMessage(call.Id, JsonSerializer.Serialize(new { error }, JsonOptions)));
+            messages.Add(BuildToolResultMessage(call.Name, JsonSerializer.Serialize(new { error }, JsonOptions)));
             yield break;
         }
 
@@ -138,9 +202,13 @@ public sealed class DiagnosticAgentService : IDiagnosticAgentService
         {
             Type = "action.proposed",
             ActionId = definition.ActionId,
+            ExecutionId = executionId,
+            NodeId = nodeId,
             Parameters = validation.Parameters,
             Reason = null
         };
+
+        yield return Status("executing", definition.Title, "Die validierte Diagnoseaktion wird ausgeführt.");
 
         yield return new AgentEvent
         {
@@ -165,7 +233,7 @@ public sealed class DiagnosticAgentService : IDiagnosticAgentService
                 Type = "graph.nodeUpdated",
                 NodePatch = new AgentGraphNodePatch { Id = nodeId, State = "skipped" }
             };
-            messages.Add(BuildToolResultMessage(call.Id,
+            messages.Add(BuildToolResultMessage(call.Name,
                 JsonSerializer.Serialize(new { error = "Bestätigung erforderlich, aber noch nicht unterstützt." }, JsonOptions)));
             yield break;
         }
@@ -222,11 +290,14 @@ public sealed class DiagnosticAgentService : IDiagnosticAgentService
                 Type = "action.completed",
                 ActionId = definition.ActionId,
                 ExecutionId = executionId,
+                ActionState = state,
                 Result = failedResult
             };
 
-            messages.Add(BuildToolResultMessage(call.Id,
-                JsonSerializer.Serialize(new { success = false, error = failureReason }, JsonOptions)));
+            _logger.LogInformation("Diagnostic execution audit: ExecutionId={ExecutionId} ActionId={ActionId} State={State} Success=false", executionId, definition.ActionId, state);
+
+            messages.Add(BuildToolResultMessage(call.Name,
+                JsonSerializer.Serialize(failedResult, JsonOptions)));
             yield break;
         }
 
@@ -236,15 +307,19 @@ public sealed class DiagnosticAgentService : IDiagnosticAgentService
             Type = "action.completed",
             ActionId = definition.ActionId,
             ExecutionId = executionId,
+            ActionState = result.Success ? "completed" : "failed",
             Result = result
         };
+
+        _logger.LogInformation("Diagnostic execution audit: ExecutionId={ExecutionId} ActionId={ActionId} State={State} Success={Success} ExitCode={ExitCode} TimedOut={TimedOut}",
+            executionId, definition.ActionId, result.Success ? "completed" : "failed", result.Success, result.Execution?.ExitCode, result.Execution?.TimedOut);
 
         if (result.Success)
         {
             yield return new AgentEvent
             {
                 Type = "graph.nodeUpdated",
-                NodePatch = new AgentGraphNodePatch { Id = nodeId, State = "completed" }
+                NodePatch = new AgentGraphNodePatch { Id = nodeId, State = "completed", Result = SummarizeResult(result) }
             };
 
             foreach (var evidence in ExtractEvidence(definition.ActionId, result))
@@ -252,22 +327,82 @@ public sealed class DiagnosticAgentService : IDiagnosticAgentService
                 yield return new AgentEvent { Type = "evidence.added", Evidence = evidence };
             }
 
-            messages.Add(BuildToolResultMessage(call.Id, JsonSerializer.Serialize(result.Data, JsonOptions)));
+            messages.Add(BuildToolResultMessage(call.Name, JsonSerializer.Serialize(result, JsonOptions)));
         }
         else
         {
             yield return new AgentEvent
             {
                 Type = "graph.nodeUpdated",
-                NodePatch = new AgentGraphNodePatch { Id = nodeId, State = "failed", Error = result.Error }
+                NodePatch = new AgentGraphNodePatch { Id = nodeId, State = "failed", Error = result.Error, Result = SummarizeResult(result) }
             };
-            messages.Add(BuildToolResultMessage(call.Id,
-                JsonSerializer.Serialize(new { success = false, error = result.Error }, JsonOptions)));
+            messages.Add(BuildToolResultMessage(call.Name, JsonSerializer.Serialize(result, JsonOptions)));
         }
+    }
+
+    private static string SummarizeResult(ActionExecutionResult result)
+    {
+        if (!result.Success)
+        {
+            return result.Error ?? "Die Diagnoseaktion ist fehlgeschlagen.";
+        }
+
+        return result.Data switch
+        {
+            WingetStatusActionResult winget => $"Version {winget.Version ?? "unbekannt"} · Exitcode {result.Execution?.ExitCode ?? -1}",
+            WingetSourcesActionResult sources => sources.Parsed
+                ? $"{sources.Sources.Count} Quellen gelesen · Exitcode {result.Execution?.ExitCode ?? -1}"
+                : $"Quellenprozess erfolgreich, Ausgabe nicht strukturiert auswertbar · Exitcode {result.Execution?.ExitCode ?? -1}",
+            EventsQueryActionResult events => $"{events.Summary.Total} Ereignisse ausgewertet",
+            DiagnosticStatusActionResult status => status.Summary,
+            _ => "Echtes Diagnoseergebnis liegt vor."
+        };
     }
 
     private static IEnumerable<AgentEvidence> ExtractEvidence(string actionId, ActionExecutionResult result)
     {
+        if (actionId == "winget.status" && result.Data is WingetStatusActionResult winget)
+        {
+            yield return new AgentEvidence
+            {
+                Id = $"winget-status-{result.CompletedAt.ToUnixTimeMilliseconds()}",
+                Provider = "winget",
+                Summary = winget.Callable
+                    ? $"Winget lokal ausgeführt: {winget.Version ?? "Version nicht lesbar"}."
+                    : "Winget wurde gefunden, war aber nicht lokal aufrufbar.",
+                Timestamp = result.CompletedAt
+            };
+            yield break;
+        }
+
+        if (actionId == "winget.sources.list" && result.Data is WingetSourcesActionResult sources)
+        {
+            if (sources.Parsed)
+            {
+                foreach (var source in sources.Sources)
+                {
+                    yield return new AgentEvidence
+                    {
+                        Id = $"winget-source-{source.Name}-{result.CompletedAt.ToUnixTimeMilliseconds()}",
+                        Provider = "winget source",
+                        Summary = $"Quelle {source.Name}: {source.Argument ?? "Adresse nicht lesbar"}.",
+                        Timestamp = result.CompletedAt
+                    };
+                }
+            }
+            else if (sources.ProcessSucceeded)
+            {
+                yield return new AgentEvidence
+                {
+                    Id = $"winget-sources-raw-{result.CompletedAt.ToUnixTimeMilliseconds()}",
+                    Provider = "winget source",
+                    Summary = "Winget-Quellen wurden lokal gelesen, die Ausgabe war jedoch nicht strukturiert auswertbar.",
+                    Timestamp = result.CompletedAt
+                };
+            }
+            yield break;
+        }
+
         if (actionId != "events.query" || result.Data is not EventsQueryActionResult eventsResult)
         {
             yield break;
@@ -315,13 +450,55 @@ public sealed class DiagnosticAgentService : IDiagnosticAgentService
         })
     };
 
-    private static object BuildToolResultMessage(string? toolCallId, string jsonContent) => new
+    private static JsonElement EmptyObjectArguments()
+    {
+        using var document = JsonDocument.Parse("{}");
+        return document.RootElement.Clone();
+    }
+
+    private static object BuildToolResultMessage(string toolName, string jsonContent) => new
     {
         role = "tool",
-        tool_call_id = toolCallId,
+        tool_name = toolName,
         content = jsonContent
     };
 
     private static AgentEvent Error(string code, string message) =>
         new() { Type = "error", Code = code, Message = message };
+
+    private static AgentEvent Status(string phase, string title, string description) => new()
+    {
+        Type = "agent.status",
+        Phase = phase,
+        Title = title,
+        Description = description
+    };
+
+    /// <summary>
+    /// Puffer für den bisherigen Antworttext. Beim Streamen werden Chunks gesammelt und erst
+    /// am Ende ausgewertet; dadurch werden Toolcalls aus mehreren NDJSON-Fragmenten zuverlässig
+    /// erkannt, ohne JSON-Rohtext im Chat anzuzeigen.
+    /// </summary>
+    private sealed class AssistantContentBuffer
+    {
+        private readonly StringBuilder _buffer = new();
+
+        public void Append(string delta) => _buffer.Append(delta);
+
+        public string? TakePending()
+        {
+            if (_buffer.Length == 0)
+            {
+                return null;
+            }
+
+            var text = _buffer.ToString();
+            _buffer.Clear();
+            return text;
+        }
+
+        public bool IsEmpty() => _buffer.Length == 0;
+
+        public void Discard() => _buffer.Clear();
+    }
 }

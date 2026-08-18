@@ -17,7 +17,6 @@ export interface OllamaSettings {
   streaming: boolean
   autoloadModel: boolean
   persistHistory: boolean
-  useDemoDataForNewCases: boolean
 }
 
 interface OllamaContextValue {
@@ -43,7 +42,6 @@ const defaultSettings: OllamaSettings = {
   streaming: true,
   autoloadModel: false,
   persistHistory: true,
-  useDemoDataForNewCases: false
 }
 
 function loadSettings(): OllamaSettings {

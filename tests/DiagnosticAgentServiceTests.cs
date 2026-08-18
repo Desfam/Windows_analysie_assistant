@@ -88,6 +88,50 @@ public sealed class DiagnosticAgentServiceTests
         Messages = new List<OllamaChatMessage> { new() { Role = "user", Content = text } }
     };
 
+    /// <summary>Baut eine Modellrunde, deren Antworttext auf mehrere Chunks verteilt ist.</summary>
+    private static List<ChatStreamChunk> TextTurn(params string[] parts)
+    {
+        var chunks = parts.Select(Delta).ToList();
+        chunks.Add(Done());
+        return chunks;
+    }
+
+    private sealed class CountingExecutor : IDiagnosticActionExecutor
+    {
+        public int Calls { get; private set; }
+
+        public Task<ActionExecutionResult> ExecuteAsync(string actionId, object parameters, CancellationToken ct)
+        {
+            Calls++;
+            return Task.FromResult(new ActionExecutionResult
+            {
+                ActionId = actionId,
+                Success = true,
+                StartedAt = DateTimeOffset.Now,
+                CompletedAt = DateTimeOffset.Now,
+                Data = new EventsQueryActionResult
+                {
+                    Query = new EventsQueryParameters(),
+                    Events = new List<EventsQueryResultEvent>
+                    {
+                        new()
+                        {
+                            EventId = 1000,
+                            Provider = "Application Error",
+                            Level = "High",
+                            Timestamp = DateTimeOffset.Now,
+                            Message = "winget.exe abgestürzt"
+                        }
+                    },
+                    Summary = new EventsQuerySummary { Total = 1 }
+                }
+            });
+        }
+    }
+
+    private static string AssembledText(IEnumerable<AgentEvent> events) =>
+        string.Concat(events.Where(e => e.Type == "assistant.delta").Select(e => e.Content));
+
     [Fact]
     public async Task PlainAnswer_ModelTextCannotCreateOrCompleteNodes()
     {
@@ -189,5 +233,156 @@ public sealed class DiagnosticAgentServiceTests
         var events = await Collect(agent, UserSays("Prüfe die Ereignisse."), cts.Token);
 
         Assert.Contains(events, e => e.Type == "graph.nodeUpdated" && e.NodePatch!.State == "cancelled");
+    }
+
+    [Theory]
+    [InlineData("""{"name":"events.query","arguments":{"levels":["Error"],"maximumResults":10}}""")]
+    [InlineData("```json\n{\"name\":\"events.query\",\"arguments\":{\"sinceHours\":24}}\n```")]
+    [InlineData("""<tool_call>{"name":"events.query","arguments":{}}</tool_call>""")]
+    public async Task TextToolCall_IsValidatedAndExecuted(string content)
+    {
+        var executor = new CountingExecutor();
+        var ollama = new FakeOllama(
+            TextTurn(content),
+            TextTurn("Ich habe ein Ereignis gefunden."));
+        var agent = CreateAgent(ollama, executor);
+
+        var events = await Collect(agent, UserSays("mein Winget funktioniert nicht"));
+
+        Assert.Equal(1, executor.Calls);
+        Assert.Contains(events, e => e.Type == "action.proposed" && e.ActionId == "events.query");
+        Assert.Contains(events, e => e.Type == "graph.nodeAdded" && e.Node!.State == "ready");
+        Assert.Contains(events, e => e.Type == "graph.nodeUpdated" && e.NodePatch!.State == "running");
+        Assert.Contains(events, e => e.Type == "graph.nodeUpdated" && e.NodePatch!.State == "completed");
+        Assert.Contains(events, e => e.Type == "evidence.added" && e.Evidence!.EventId == 1000);
+    }
+
+    [Fact]
+    public async Task TextToolCall_SplitAcrossChunks_IsExecuted()
+    {
+        var executor = new CountingExecutor();
+        var ollama = new FakeOllama(
+            TextTurn("{\"name\":", "\"events.query\",", "\"arguments\":{", "\"maximumResults\":10}", "}"),
+            TextTurn("Auswertung folgt."));
+        var agent = CreateAgent(ollama, executor);
+
+        var events = await Collect(agent, UserSays("mein Winget funktioniert nicht"));
+
+        Assert.Equal(1, executor.Calls);
+        Assert.Contains(events, e => e.Type == "action.completed" && e.ActionId == "events.query");
+    }
+
+    [Fact]
+    public async Task TextToolCall_RawJsonIsNeverShownInChat()
+    {
+        var ollama = new FakeOllama(
+            TextTurn("""{"name":"events.query","arguments":{"levels":["Error"]}}"""),
+            TextTurn("Es wurde ein Absturz von winget gefunden."));
+        var agent = CreateAgent(ollama, new CountingExecutor());
+
+        var events = await Collect(agent, UserSays("mein Winget funktioniert nicht"));
+
+        var text = AssembledText(events);
+        Assert.DoesNotContain("events.query", text, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("\"arguments\"", text, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("winget", text, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task NormalAnswer_IsStreamedCompletely()
+    {
+        var executor = new CountingExecutor();
+        var ollama = new FakeOllama(TextTurn("Seit wann ", "tritt das Problem ", "auf?"));
+        var agent = CreateAgent(ollama, executor);
+
+        var events = await Collect(agent, UserSays("mein Winget funktioniert nicht"));
+
+        Assert.Equal(0, executor.Calls);
+        Assert.Equal("Seit wann tritt das Problem auf?", AssembledText(events));
+    }
+
+    [Fact]
+    public async Task TextToolCall_UnknownActionName_IsRejectedWithoutExecution()
+    {
+        var executor = new CountingExecutor();
+        var ollama = new FakeOllama(
+            TextTurn("""{"name":"system.reboot","arguments":{}}"""),
+            TextTurn("Das darf ich nicht."));
+        var agent = CreateAgent(ollama, executor);
+
+        var events = await Collect(agent, UserSays("Starte den Rechner neu."));
+
+        Assert.Equal(0, executor.Calls);
+        Assert.Contains(events, e => e.Type == "error" && e.Code == "invalid_tool_call");
+        Assert.DoesNotContain(events, e => e.Type == "action.started");
+        Assert.DoesNotContain(events, e => e.Type == "evidence.added");
+    }
+
+    [Fact]
+    public async Task TextToolCall_InvalidParameters_IsRejectedWithoutExecution()
+    {
+        var executor = new CountingExecutor();
+        var ollama = new FakeOllama(
+            TextTurn("""{"name":"events.query","arguments":{"sinceHours":99999}}"""),
+            TextTurn("Der Zeitraum war ungültig."));
+        var agent = CreateAgent(ollama, executor);
+
+        var events = await Collect(agent, UserSays("Prüfe die Ereignisse."));
+
+        Assert.Equal(0, executor.Calls);
+        Assert.Contains(events, e => e.Type == "error" && e.Code == "invalid_tool_call");
+        Assert.DoesNotContain(events, e => e.Type == "action.started");
+    }
+
+    [Fact]
+    public async Task TextToolCall_MalformedJson_IsRejectedWithoutExecution()
+    {
+        var executor = new CountingExecutor();
+        var ollama = new FakeOllama(
+            TextTurn("<tool_call>{\"name\":\"events.query\",</tool_call>"),
+            TextTurn("Der Aufruf war fehlerhaft."));
+        var agent = CreateAgent(ollama, executor);
+
+        var events = await Collect(agent, UserSays("Prüfe die Ereignisse."));
+
+        Assert.Equal(0, executor.Calls);
+        Assert.Contains(events, e => e.Type == "error" && e.Code == "invalid_tool_call");
+    }
+
+    [Fact]
+    public async Task NativeToolCall_TakesPrecedence_TextJsonIsNotExecutedTwice()
+    {
+        var executor = new CountingExecutor();
+        // Das Modell liefert denselben Aufruf zusätzlich als JSON-Text.
+        var firstTurn = new List<ChatStreamChunk>
+        {
+            Delta("""{"name":"events.query","arguments":{}}"""),
+            ToolCall("events.query", "{}")
+        };
+        var ollama = new FakeOllama(firstTurn, TextTurn("Auswertung folgt."));
+        var agent = CreateAgent(ollama, executor);
+
+        var events = await Collect(agent, UserSays("mein Winget funktioniert nicht"));
+
+        Assert.Equal(1, executor.Calls);
+        Assert.Single(events, e => e.Type == "action.started");
+        Assert.Single(events, e => e.Type == "graph.nodeAdded");
+        Assert.DoesNotContain("events.query", AssembledText(events), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task TextToolCall_InsideThinkingBlock_IsNotExecuted()
+    {
+        var executor = new CountingExecutor();
+        var ollama = new FakeOllama(TextTurn(
+            "<think>Vielleicht {\"name\":\"events.query\",\"arguments\":{}} </think>Keine Prüfung war erforderlich."));
+        var agent = CreateAgent(ollama, executor);
+
+        var events = await Collect(agent, UserSays("Bitte bewerte das Problem."));
+
+        Assert.Equal(0, executor.Calls);
+        Assert.DoesNotContain(events, e => e.Type == "action.started");
+        Assert.DoesNotContain("events.query", AssembledText(events), StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Keine Prüfung", AssembledText(events));
     }
 }

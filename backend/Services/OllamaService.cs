@@ -132,9 +132,25 @@ public sealed class OllamaService : IOllamaService
         }
 
         var stopwatch = Stopwatch.StartNew();
+        var timedOut = false;
         await foreach (var chunk in ReadChatStreamAsync(response, stopwatch, token))
         {
+            if (chunk.Type == "error" && chunk.Message is not null &&
+                chunk.Message.Contains("hat nicht innerhalb", StringComparison.OrdinalIgnoreCase))
+            {
+                timedOut = true;
+            }
+
             yield return chunk;
+        }
+
+        if (!timedOut && !cancellationToken.IsCancellationRequested && linked.IsCancellationRequested)
+        {
+            yield return new ChatStreamChunk
+            {
+                Type = "error",
+                Message = $"Das ausgewählte Modell hat nicht innerhalb von {_options.ChatTimeoutSeconds} Sekunden geantwortet."
+            };
         }
 
         response.Dispose();
@@ -180,23 +196,29 @@ public sealed class OllamaService : IOllamaService
         }
 
         var statusCode = response.StatusCode;
+        var errorBody = await response.Content.ReadAsStringAsync(token);
+        _logger.LogWarning(
+            "Ollama Chat-Fehler ({StatusCode}) für Modell {Model}: {Body}",
+            (int)statusCode,
+            model,
+            errorBody);
+
         if (statusCode == HttpStatusCode.BadRequest && tools is { Count: > 0 })
         {
-            var body = await response.Content.ReadAsStringAsync(token);
             response.Dispose();
 
-            if (body.Contains("does not support tools", StringComparison.OrdinalIgnoreCase))
+            if (errorBody.Contains("does not support tools", StringComparison.OrdinalIgnoreCase))
             {
                 _logger.LogInformation(
                     "Modell {Model} unterstützt keine Werkzeuge, wiederhole Anfrage ohne Werkzeuge.", model);
                 return await SendChatRequestAsync(client, baseUrl, model, messages, null, token);
             }
 
-            return (null, "Die Anfrage an das Modell ist fehlgeschlagen.");
+            return (null, BuildOllamaFailureMessage(statusCode, errorBody));
         }
 
         response.Dispose();
-        return (null, $"Die Anfrage an das Modell ist fehlgeschlagen ({(int)statusCode}).");
+        return (null, BuildOllamaFailureMessage(statusCode, errorBody));
     }
 
     private async IAsyncEnumerable<ChatStreamChunk> ReadChatStreamAsync(
@@ -206,6 +228,7 @@ public sealed class OllamaService : IOllamaService
     {
         using var stream = await response.Content.ReadAsStreamAsync(token);
         using var reader = new StreamReader(stream, Encoding.UTF8);
+        var timeoutError = false;
 
         while (!reader.EndOfStream)
         {
@@ -217,6 +240,7 @@ public sealed class OllamaService : IOllamaService
             }
             catch (OperationCanceledException)
             {
+                timeoutError = token.IsCancellationRequested;
                 break;
             }
 
@@ -242,6 +266,15 @@ public sealed class OllamaService : IOllamaService
             {
                 yield break;
             }
+        }
+
+        if (timeoutError)
+        {
+            yield return new ChatStreamChunk
+            {
+                Type = "error",
+                Message = $"Das ausgewählte Modell hat nicht innerhalb von {_options.ChatTimeoutSeconds} Sekunden geantwortet."
+            };
         }
     }
 
@@ -317,6 +350,10 @@ public sealed class OllamaService : IOllamaService
                 }
             }
 
+            var hasNativeThinking = TryGetThinking(root, out _) ||
+                (root.TryGetProperty("message", out var messageForThinking) &&
+                 TryGetThinking(messageForThinking, out _));
+
             if (root.TryGetProperty("done", out var doneElement) &&
                 doneElement.ValueKind == JsonValueKind.True)
             {
@@ -336,6 +373,12 @@ public sealed class OllamaService : IOllamaService
                 }
             }
 
+            if (hasNativeThinking)
+            {
+                // Native thinking is deliberately discarded and never becomes content.
+                return false;
+            }
+
             return false;
         }
     }
@@ -343,8 +386,75 @@ public sealed class OllamaService : IOllamaService
     private static object BuildChatPayload(string model, IReadOnlyList<object> messages, IReadOnlyList<object>? tools)
     {
         return tools is { Count: > 0 }
-            ? new { model, messages, stream = true, tools }
-            : new { model, messages, stream = true };
+            ? new { model, messages, stream = true, think = false, tools }
+            : new { model, messages, stream = true, think = false };
+    }
+
+    private static bool TryGetThinking(JsonElement element, out string? thinking)
+    {
+        foreach (var name in new[] { "thinking", "analysis" })
+        {
+            if (element.TryGetProperty(name, out var value) &&
+                value.ValueKind == JsonValueKind.String &&
+                !string.IsNullOrWhiteSpace(value.GetString()))
+            {
+                thinking = value.GetString();
+                return true;
+            }
+        }
+
+        thinking = null;
+        return false;
+    }
+
+    private static string BuildOllamaFailureMessage(HttpStatusCode statusCode, string? body)
+    {
+        if (!string.IsNullOrWhiteSpace(body))
+        {
+            var normalized = body.Trim();
+            if (normalized.Length > 400)
+            {
+                normalized = normalized[..397] + "...";
+            }
+
+            if (normalized.Contains("does not support tools", StringComparison.OrdinalIgnoreCase))
+            {
+                return "Modell unterstützt keine Tools.";
+            }
+
+            if (normalized.Contains("context", StringComparison.OrdinalIgnoreCase) &&
+                normalized.Contains("window", StringComparison.OrdinalIgnoreCase))
+            {
+                return "Kontextfenster überschritten.";
+            }
+
+            if (normalized.Contains("timeout", StringComparison.OrdinalIgnoreCase) ||
+                statusCode == HttpStatusCode.RequestTimeout)
+            {
+                return "Zeitüberschreitung bei der Anfrage.";
+            }
+
+            if (normalized.Contains("connection", StringComparison.OrdinalIgnoreCase) ||
+                normalized.Contains("refused", StringComparison.OrdinalIgnoreCase) ||
+                statusCode == HttpStatusCode.ServiceUnavailable)
+            {
+                return "Verbindung zu Ollama unterbrochen.";
+            }
+
+            if ((int)statusCode >= 500)
+            {
+                return "Ollama-Runner wurde beendet.";
+            }
+        }
+
+        return statusCode switch
+        {
+            HttpStatusCode.BadRequest => "Modell lieferte keine verwertbare Antwort.",
+            HttpStatusCode.RequestTimeout => "Zeitüberschreitung bei der Anfrage.",
+            HttpStatusCode.ServiceUnavailable => "Verbindung zu Ollama unterbrochen.",
+            _ when (int)statusCode >= 500 => "Ollama-Runner wurde beendet.",
+            _ => "Die Anfrage an das Modell ist fehlgeschlagen."
+        };
     }
 
     /// <summary>Baut aus dem Fallkontext einen zusätzlichen System-Textblock (nur echte Angaben).</summary>

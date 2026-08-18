@@ -1,4 +1,4 @@
-import { Clock, Code2, Info, Play, Search, ShieldCheck, SkipForward } from 'lucide-react'
+import { Clock, Code2, Info, Search, ShieldCheck, SkipForward } from 'lucide-react'
 import type { DiagnosisAction } from '../types'
 import { RiskBadge } from './RiskBadge'
 import { StatusBadge } from './StatusBadge'
@@ -7,10 +7,9 @@ interface ActionCardProps {
   action: DiagnosisAction
   onShowCommand: (action: DiagnosisAction) => void
   onSkip: (action: DiagnosisAction) => void
-  onRun: (action: DiagnosisAction) => void
 }
 
-export function ActionCard({ action, onShowCommand, onSkip, onRun }: ActionCardProps) {
+export function ActionCard({ action, onShowCommand, onSkip }: ActionCardProps) {
   const isBusy = action.state === 'running'
   const isDone = action.state === 'completed'
   const isSkipped = action.state === 'skipped'
@@ -48,6 +47,15 @@ export function ActionCard({ action, onShowCommand, onSkip, onRun }: ActionCardP
         <span>{action.note}</span>
       </div>
 
+      {action.execution && (
+        <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-slate-300 sm:grid-cols-3">
+          <Detail icon={null} label="Exitcode">{action.execution.exitCode}</Detail>
+          <Detail icon={null} label="Dauer">{formatDuration(action.execution.durationMs)}</Detail>
+          <Detail icon={null} label="Start">{new Date(action.execution.startedAt).toLocaleTimeString('de-DE')}</Detail>
+        </div>
+      )}
+      {action.error && <p className="mt-2 text-xs text-red-300">Fehler: {action.error}</p>}
+
       <div className="mt-4 flex flex-wrap items-center gap-2">
         <button
           type="button"
@@ -66,18 +74,14 @@ export function ActionCard({ action, onShowCommand, onSkip, onRun }: ActionCardP
           <SkipForward className="h-4 w-4" />
           Überspringen
         </button>
-        <button
-          type="button"
-          onClick={() => onRun(action)}
-          disabled={disabled}
-          className="ml-auto inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-4 py-2 text-xs font-semibold text-white transition-colors hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          <Play className="h-4 w-4" />
-          {isBusy ? 'Wird ausgeführt …' : isDone ? 'Ausgeführt' : 'Ausführen'}
-        </button>
+        <span className="ml-auto text-xs text-slate-500">{isBusy ? 'Lokal in Ausführung' : isDone ? 'Lokal ausgeführt' : 'Startet nach Freigabe durch den Agenten'}</span>
       </div>
     </div>
   )
+}
+
+function formatDuration(durationMs: number): string {
+  return `${(durationMs / 1000).toLocaleString('de-DE', { maximumFractionDigits: 1 })} s`
 }
 
 function Detail({

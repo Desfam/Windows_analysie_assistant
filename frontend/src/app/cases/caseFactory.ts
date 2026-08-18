@@ -1,16 +1,9 @@
 import type {
-  Cause,
   DiagnosisEdge,
   DiagnosisNode,
   DiagnosisNodeData,
   EdgeState
 } from '../../diagnosis/types'
-import {
-  initialCauses,
-  initialChat,
-  initialEdges,
-  initialNodes
-} from '../../diagnosis/data/demoData'
 import type { DiagnosisCase } from './casesTypes'
 
 export interface SeedNode {
@@ -44,25 +37,6 @@ let caseCounter = 0
 export function nextCaseId(): string {
   caseCounter += 1
   return `case-${Date.now()}-${caseCounter}`
-}
-
-export function createDemoCase(modelName: string | null): DiagnosisCase {
-  const now = new Date().toISOString()
-  return {
-    id: `case-demo-${Date.now()}`,
-    title: 'Demo-Fall: Unregelmäßige System-Freezes',
-    createdAt: now,
-    updatedAt: now,
-    status: 'running',
-    modelName,
-    messages: initialChat,
-    nodes: initialNodes.map(toNode),
-    edges: initialEdges.map((edge) => toEdge(edge, 'pending')),
-    causes: initialCauses as Cause[],
-    evidence: [],
-    selectedEventIds: [],
-    isDemo: true
-  }
 }
 
 export function createEmptyCase(title: string, modelName: string | null): DiagnosisCase {

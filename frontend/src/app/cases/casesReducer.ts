@@ -22,6 +22,7 @@ export type CasesAction =
   | { type: 'APPEND_TO_MESSAGE'; id: string; text: string }
   | { type: 'UPDATE_MESSAGE'; id: string; patch: Partial<ChatMessage> }
   | { type: 'SET_ACTION_STATE'; actionId: string; state: ExecutionState }
+  | { type: 'SET_ACTION_RESULT'; actionId: string; state: ExecutionState; result: import('../../diagnosis/types').ActionExecution; error?: string | null }
   | { type: 'PATCH_NODE'; id: string; patch: Partial<DiagnosisNodeData> }
   | { type: 'ADD_NODE'; node: SeedNode }
   | { type: 'ADD_EDGE'; edge: SeedEdge; state: EdgeState }
@@ -33,6 +34,7 @@ export type CasesAction =
   | { type: 'CREATE_CASE'; newCase: DiagnosisCase }
   | { type: 'SELECT_CASE'; id: string }
   | { type: 'ADD_PROBLEM_NODE'; id: string; title: string; description: string }
+  | { type: 'INITIALIZE_WORKFLOW' }
   | { type: 'AGENT_ADD_NODE'; node: AgentGraphNode }
   | { type: 'AGENT_PATCH_NODE'; patch: AgentGraphNodePatch }
   | { type: 'AGENT_ADD_EVIDENCE'; evidence: AgentEvidence }
@@ -131,6 +133,16 @@ export function casesReducer(state: CasesState, action: CasesAction): CasesState
         )
       }))
 
+    case 'SET_ACTION_RESULT':
+      return updateActive(state, (c) => ({
+        ...c,
+        messages: c.messages.map((m) =>
+          m.action?.id === action.actionId
+            ? { ...m, action: { ...m.action, state: action.state, execution: action.result, error: action.error ?? undefined } }
+            : m
+        )
+      }))
+
     case 'PATCH_NODE':
       return updateActive(state, (c) => ({
         ...c,
@@ -202,10 +214,67 @@ export function casesReducer(state: CasesState, action: CasesAction): CasesState
                     risk: 'R0',
                     systemImpact: { changesSystem: false, label: 'Keine Systemänderung' }
                   }
+                }),
+                toNode({
+                  id: 'phase-analyze',
+                  data: { kind: 'verification', title: 'Problem analysieren', description: 'Die Anfrage wird für die Diagnose eingeordnet.', state: 'running', risk: 'R0', systemImpact: { changesSystem: false, label: 'Keine Systemänderung' } }
+                }),
+                toNode({
+                  id: 'phase-plan',
+                  data: { kind: 'verification', title: 'Nächsten Schritt bestimmen', description: 'Ein sicherer Diagnoseschritt wird bestimmt.', state: 'pending', risk: 'R0', systemImpact: { changesSystem: false, label: 'Keine Systemänderung' } }
+                }),
+                toNode({
+                  id: 'phase-evaluate',
+                  data: { kind: 'verification', title: 'Ergebnisse auswerten', description: 'Ergebnisse werden nach der Prüfung eingeordnet.', state: 'pending', risk: 'R0', systemImpact: { changesSystem: false, label: 'Keine Systemänderung' } }
                 })
+              ],
+              edges: [
+                ...c.edges,
+                toEdge({ id: 'e-problem-analyze', source: action.id, target: 'phase-analyze' }, 'completed'),
+                toEdge({ id: 'e-analyze-plan', source: 'phase-analyze', target: 'phase-plan' }, 'active'),
+                toEdge({ id: 'e-plan-evaluate', source: 'phase-plan', target: 'phase-evaluate' }, 'pending')
               ]
             }
       )
+
+    case 'INITIALIZE_WORKFLOW':
+      return updateActive(state, (c) => {
+        if (c.nodes.some((node) => node.id === 'phase-analyze')) return c
+        const placeholders: SeedNode[] = [
+          {
+            id: 'phase-analyze',
+            data: {
+              kind: 'verification', title: 'Problem analysieren',
+              description: 'Die Anfrage wird für die Diagnose eingeordnet.', state: 'running', risk: 'R0',
+              systemImpact: { changesSystem: false, label: 'Keine Systemänderung' }
+            }
+          },
+          {
+            id: 'phase-plan',
+            data: {
+              kind: 'verification', title: 'Nächsten Schritt bestimmen',
+              description: 'Ein sicherer Diagnoseschritt wird bestimmt.', state: 'pending', risk: 'R0',
+              systemImpact: { changesSystem: false, label: 'Keine Systemänderung' }
+            }
+          },
+          {
+            id: 'phase-evaluate',
+            data: {
+              kind: 'verification', title: 'Ergebnisse auswerten',
+              description: 'Ergebnisse werden nach der Prüfung eingeordnet.', state: 'pending', risk: 'R0',
+              systemImpact: { changesSystem: false, label: 'Keine Systemänderung' }
+            }
+          }
+        ]
+        const nodes = [...c.nodes, ...placeholders.map(toNode)]
+        const edges = [
+          ...c.edges,
+          toEdge({ id: 'e-problem-analyze', source: 'problem', target: 'phase-analyze' }, 'completed'),
+          toEdge({ id: 'e-analyze-plan', source: 'phase-analyze', target: 'phase-plan' }, 'active'),
+          toEdge({ id: 'e-plan-evaluate', source: 'phase-plan', target: 'phase-evaluate' }, 'pending')
+        ]
+        return { ...c, nodes, edges }
+      })
 
     case 'AGENT_ADD_NODE': {
       const execState = agentStateToExecution(action.node.state)
@@ -213,7 +282,9 @@ export function casesReducer(state: CasesState, action: CasesAction): CasesState
         if (c.nodes.some((n) => n.id === action.node.id)) {
           return c
         }
-        const parentId = findParentId(c.nodes)
+        const retainedNodes = c.nodes.filter((node) => !['phase-analyze', 'phase-plan'].includes(node.id))
+        const retainedEdges = c.edges.filter((edge) => !['phase-analyze', 'phase-plan'].includes(edge.source) && !['phase-analyze', 'phase-plan'].includes(edge.target))
+        const parentId = findParentId(retainedNodes)
         const seed: SeedNode = {
           id: action.node.id,
           data: {
@@ -228,11 +299,28 @@ export function casesReducer(state: CasesState, action: CasesAction): CasesState
             }
           }
         }
-        const nodes = [...c.nodes, toNode(seed)]
+        const hasEvaluation = retainedNodes.some((node) => node.id === 'phase-evaluate')
+        const nodes = [
+          ...retainedNodes,
+          toNode(seed),
+          ...(hasEvaluation ? [] : [toNode({
+            id: 'phase-evaluate',
+            data: { kind: 'verification', title: 'Ergebnisse auswerten', description: 'Ergebnisse werden nach der Prüfung eingeordnet.', state: 'pending', risk: 'R0', systemImpact: { changesSystem: false, label: 'Keine Systemänderung' } }
+          })]),
+          ...(retainedNodes.some((node) => node.id === 'phase-next') ? [] : [toNode({
+            id: 'phase-next',
+            data: { kind: 'verification', title: 'Weitere Prüfung planen', description: 'Der nächste sichere Schritt wird aus echten Ergebnissen bestimmt.', state: 'pending', risk: 'R0', systemImpact: { changesSystem: false, label: 'Keine Systemänderung' } }
+          })])
+        ]
         const edges =
           parentId != null
-            ? [...c.edges, toEdge({ id: `e-${parentId}-${action.node.id}`, source: parentId, target: action.node.id }, edgeStateFor(execState))]
-            : c.edges
+            ? [
+                ...retainedEdges,
+                toEdge({ id: `e-${parentId}-${action.node.id}`, source: parentId, target: action.node.id }, edgeStateFor(execState)),
+                toEdge({ id: `e-${action.node.id}-evaluate`, source: action.node.id, target: 'phase-evaluate' }, 'pending'),
+                toEdge({ id: 'e-evaluate-next', source: 'phase-evaluate', target: 'phase-next' }, 'pending')
+              ]
+            : retainedEdges
         return { ...c, nodes, edges }
       })
     }
@@ -266,7 +354,6 @@ export function casesReducer(state: CasesState, action: CasesAction): CasesState
         if (c.nodes.some((n) => n.id === evidenceId)) {
           return c
         }
-        const parentId = findParentId(c.nodes, 'action')
         const title = action.evidence.eventId != null
           ? `Ereignis ${action.evidence.eventId} · ${action.evidence.provider ?? 'unbekannt'}`
           : 'Beleg'
@@ -283,17 +370,13 @@ export function casesReducer(state: CasesState, action: CasesAction): CasesState
           }
         }
         const nodes = [...c.nodes, toNode(seed)]
-        const edges =
-          parentId != null
-            ? [...c.edges, toEdge({ id: `e-${parentId}-${evidenceId}`, source: parentId, target: evidenceId }, 'completed')]
-            : c.edges
         const evidence: Evidence = {
           id: evidenceId,
           eventId: action.evidence.eventId ?? undefined,
           source: action.evidence.provider ?? undefined,
           summary: action.evidence.summary
         }
-        return { ...c, nodes, edges, evidence: [...c.evidence, evidence] }
+        return { ...c, nodes, evidence: [...c.evidence, evidence] }
       })
 
     default:

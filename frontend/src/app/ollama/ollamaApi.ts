@@ -105,6 +105,27 @@ export interface AgentEvidence {
   timestamp?: string | null
 }
 
+export interface AgentActionResult {
+  actionId: string
+  success: boolean
+  startedAt: string
+  completedAt: string
+  error?: string | null
+  data?: Record<string, unknown> | null
+  execution?: {
+    program: string
+    arguments: string[]
+    startedAt: string
+    completedAt: string
+    durationMs: number
+    exitCode: number
+    standardOutput: string
+    standardError: string
+    timedOut: boolean
+    startError?: string | null
+  } | null
+}
+
 /** Ein eindeutig typisiertes Ereignis der serverseitigen Agenten-Orchestrierung. */
 export interface AgentEvent {
   type:
@@ -116,21 +137,39 @@ export interface AgentEvent {
     | 'action.started'
     | 'action.completed'
     | 'evidence.added'
+    | 'agent.status'
     | 'error'
   content?: string
   actionId?: string
+  nodeId?: string
   parameters?: unknown
   reason?: string
   node?: AgentGraphNode
   nodePatch?: AgentGraphNodePatch
   executionId?: string
-  result?: unknown
+  actionState?: string
+  result?: AgentActionResult
   evidence?: AgentEvidence
   messageId?: string
   durationMs?: number
   code?: string
   message?: string
+  phase?: AgentPhase
+  title?: string
+  description?: string
 }
+
+export type AgentPhase =
+  | 'receiving'
+  | 'understanding'
+  | 'planning'
+  | 'executing'
+  | 'evaluating'
+  | 'waiting_confirmation'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+  | 'timeout'
 
 export interface AgentHandlers {
   onEvent: (event: AgentEvent) => void

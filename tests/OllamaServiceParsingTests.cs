@@ -48,6 +48,15 @@ public sealed class OllamaServiceParsingTests
     }
 
     [Fact]
+    public void TryParseChatLine_RootThinking_IsNotSurfacedAsAnswer()
+    {
+        var line = "{\"thinking\":\"interne Gedanken\",\"done\":false}";
+
+        Assert.False(OllamaService.TryParseChatLine(line, 5, out var chunk));
+        Assert.Null(chunk);
+    }
+
+    [Fact]
     public void TryParseChatLine_DoneLine_ReturnsDoneWithDuration()
     {
         var line = "{\"done\":true,\"total_duration\":123456}";

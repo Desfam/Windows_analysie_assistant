@@ -178,12 +178,6 @@ export function SettingsPage() {
               checked={settings.persistHistory}
               onChange={(v) => updateSettings({ persistHistory: v })}
             />
-            <Toggle
-              label="Demo-Daten für neue Fälle verwenden"
-              description="Neue Fälle starten mit dem Beispiel „System-Freezes“ statt leer. Standardmäßig aus."
-              checked={settings.useDemoDataForNewCases}
-              onChange={(v) => updateSettings({ useDemoDataForNewCases: v })}
-            />
           </Section>
         </div>
       </div>

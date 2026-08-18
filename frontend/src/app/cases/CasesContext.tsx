@@ -2,24 +2,19 @@ import {
   createContext,
   useCallback,
   useContext,
-  useEffect,
   useMemo,
   useReducer,
-  useRef,
-  useState,
   type ReactNode
 } from 'react'
 import type {
   ChatMessage,
   Cause,
   DiagnosisNodeData,
-  EdgeState,
   ExecutionState
 } from '../../diagnosis/types'
 import type { EventItem } from '../../types'
-import { buildEventsFollowUp } from '../../diagnosis/data/demoData'
 import { casesReducer, type CasesState } from './casesReducer'
-import { createDemoCase, createEmptyCase } from './caseFactory'
+import { createEmptyCase } from './caseFactory'
 import type { CaseStatus, DiagnosisCase } from './casesTypes'
 import type { AgentEvidence, AgentGraphNode, AgentGraphNodePatch } from '../ollama/ollamaApi'
 
@@ -27,9 +22,7 @@ interface CasesContextValue {
   cases: DiagnosisCase[]
   activeCase: DiagnosisCase
   activeId: string
-  isRunningDemo: boolean
   createCase: (title: string, model: string | null) => string
-  loadDemoCase: (model: string | null) => string
   selectCase: (id: string) => void
   setCaseModel: (model: string) => void
   setCaseStatus: (status: CaseStatus) => void
@@ -37,11 +30,12 @@ interface CasesContextValue {
   appendToMessage: (id: string, text: string) => void
   updateMessage: (id: string, patch: Partial<ChatMessage>) => void
   setActionState: (actionId: string, state: ExecutionState) => void
+  setActionResult: (actionId: string, state: ExecutionState, result: import('../../diagnosis/types').ActionExecution, error?: string | null) => void
   setCauses: (causes: Cause[]) => void
   addEventCandidate: (event: EventItem) => void
   skipAction: (actionId: string, targetNodeId: string) => void
-  runEventsDemo: () => void
   addProblemNode: (id: string, title: string, description: string) => void
+  initializeWorkflow: () => void
   agentAddNode: (node: AgentGraphNode) => void
   agentPatchNode: (patch: AgentGraphNodePatch) => void
   agentAddEvidence: (evidence: AgentEvidence) => void
@@ -60,25 +54,8 @@ export function nextMessageId(): string {
   return `msg-${Date.now()}-${messageCounter}`
 }
 
-function nowTime(): string {
-  return new Date().toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })
-}
-
 export function CasesProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(casesReducer, undefined, createInitialState)
-  const [isRunningDemo, setIsRunningDemo] = useState(false)
-  const timers = useRef<number[]>([])
-  const runningRef = useRef(false)
-
-  useEffect(() => {
-    const pending = timers.current
-    return () => pending.forEach((id) => window.clearTimeout(id))
-  }, [])
-
-  const schedule = useCallback((fn: () => void, delay: number) => {
-    const id = window.setTimeout(fn, delay)
-    timers.current.push(id)
-  }, [])
 
   const activeCase = useMemo(
     () => state.cases.find((c) => c.id === state.activeId) ?? state.cases[0],
@@ -91,17 +68,12 @@ export function CasesProvider({ children }: { children: ReactNode }) {
     return newCase.id
   }, [])
 
-  const loadDemoCase = useCallback((model: string | null) => {
-    const demo = createDemoCase(model)
-    dispatch({ type: 'CREATE_CASE', newCase: demo })
-    return demo.id
-  }, [])
-
   const addProblemNode = useCallback(
     (id: string, title: string, description: string) =>
       dispatch({ type: 'ADD_PROBLEM_NODE', id, title, description }),
     []
   )
+  const initializeWorkflow = useCallback(() => dispatch({ type: 'INITIALIZE_WORKFLOW' }), [])
   const agentAddNode = useCallback((node: AgentGraphNode) => dispatch({ type: 'AGENT_ADD_NODE', node }), [])
   const agentPatchNode = useCallback((patch: AgentGraphNodePatch) => dispatch({ type: 'AGENT_PATCH_NODE', patch }), [])
   const agentAddEvidence = useCallback(
@@ -123,6 +95,11 @@ export function CasesProvider({ children }: { children: ReactNode }) {
   )
   const setActionState = useCallback(
     (actionId: string, s: ExecutionState) => dispatch({ type: 'SET_ACTION_STATE', actionId, state: s }),
+    []
+  )
+  const setActionResult = useCallback(
+    (actionId: string, actionState: ExecutionState, result: import('../../diagnosis/types').ActionExecution, error?: string | null) =>
+      dispatch({ type: 'SET_ACTION_RESULT', actionId, state: actionState, result, error }),
     []
   )
   const setCauses = useCallback((causes: Cause[]) => dispatch({ type: 'SET_CAUSES', causes }), [])
@@ -159,77 +136,12 @@ export function CasesProvider({ children }: { children: ReactNode }) {
     })
   }, [])
 
-  const runEventsDemo = useCallback(() => {
-    if (runningRef.current) return
-    const events = activeCase.nodes.find((n) => n.id === 'events')
-    if (!events || events.data.state === 'completed') return
-
-    runningRef.current = true
-    setIsRunningDemo(true)
-    const follow = buildEventsFollowUp()
-
-    dispatch({ type: 'SET_ACTION_STATE', actionId: 'action-events', state: 'running' })
-    dispatch({ type: 'PATCH_NODE', id: 'events', patch: { state: 'running', startedAt: nowTime() } })
-    dispatch({ type: 'SET_EDGE_STATE', id: 'e-problem-events', state: 'active' })
-
-    schedule(() => {
-      dispatch({ type: 'SET_ACTION_STATE', actionId: 'action-events', state: 'completed' })
-      dispatch({
-        type: 'PATCH_NODE',
-        id: 'events',
-        patch: {
-          state: 'completed',
-          finishedAt: nowTime(),
-          result: 'Relevante Ereignisse gefunden (Ereignis 129 · stornvme).'
-        }
-      })
-      dispatch({ type: 'SET_EDGE_STATE', id: 'e-problem-events', state: 'completed' })
-    }, 2000)
-
-    const addAt = (delay: number, nodeIndex: number, edgeIndex: number, edgeState: EdgeState) =>
-      schedule(() => {
-        dispatch({ type: 'ADD_NODE', node: follow.nodes[nodeIndex] })
-        dispatch({ type: 'ADD_EDGE', edge: follow.edges[edgeIndex], state: edgeState })
-      }, delay)
-
-    addAt(2200, 0, 0, 'completed')
-    addAt(2450, 1, 1, 'completed')
-    addAt(2700, 2, 2, 'active')
-    addAt(2950, 3, 3, 'pending')
-    addAt(3200, 4, 4, 'discarded')
-
-    schedule(() => {
-      dispatch({ type: 'PATCH_NODE', id: follow.readyNodeId, patch: { state: 'ready' } })
-      dispatch({
-        type: 'SET_CAUSES',
-        causes: [
-          { id: 'cause-nvme', title: 'NVMe-Treiber oder Firmware', level: 'strong' },
-          { id: 'cause-ram', title: 'Arbeitsspeicher', level: 'unclear' },
-          { id: 'cause-update', title: 'Windows Update', level: 'some' }
-        ]
-      })
-      dispatch({
-        type: 'ADD_MESSAGE',
-        message: {
-          id: nextMessageId(),
-          role: 'assistant',
-          text: follow.summary,
-          timestamp: nowTime()
-        }
-      })
-      runningRef.current = false
-      setIsRunningDemo(false)
-    }, 3450)
-  }, [activeCase.nodes, schedule])
-
   const value = useMemo<CasesContextValue>(
     () => ({
       cases: state.cases,
       activeCase,
       activeId: state.activeId,
-      isRunningDemo,
       createCase,
-      loadDemoCase,
       selectCase,
       setCaseModel,
       setCaseStatus,
@@ -237,11 +149,12 @@ export function CasesProvider({ children }: { children: ReactNode }) {
       appendToMessage,
       updateMessage,
       setActionState,
+      setActionResult,
       setCauses,
       addEventCandidate,
       skipAction,
-      runEventsDemo,
       addProblemNode,
+      initializeWorkflow,
       agentAddNode,
       agentPatchNode,
       agentAddEvidence
@@ -250,9 +163,7 @@ export function CasesProvider({ children }: { children: ReactNode }) {
       state.cases,
       state.activeId,
       activeCase,
-      isRunningDemo,
       createCase,
-      loadDemoCase,
       selectCase,
       setCaseModel,
       setCaseStatus,
@@ -260,11 +171,12 @@ export function CasesProvider({ children }: { children: ReactNode }) {
       appendToMessage,
       updateMessage,
       setActionState,
+      setActionResult,
       setCauses,
       addEventCandidate,
       skipAction,
-      runEventsDemo,
       addProblemNode,
+      initializeWorkflow,
       agentAddNode,
       agentPatchNode,
       agentAddEvidence

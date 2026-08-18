@@ -85,9 +85,24 @@ export interface DiagnosisAction {
   risk: RiskLevel
   estimatedDuration: string
   note: string
-  demoCommand: string
+  command: string
   state: ExecutionState
   targetNodeId: string
+  execution?: ActionExecution
+  error?: string
+}
+
+export interface ActionExecution {
+  program: string
+  arguments: string[]
+  startedAt: string
+  completedAt: string
+  durationMs: number
+  exitCode: number
+  standardOutput: string
+  standardError: string
+  timedOut: boolean
+  startError?: string | null
 }
 
 export interface ChatMessage {
@@ -101,6 +116,13 @@ export interface ChatMessage {
   error?: string
   model?: string
   aborted?: boolean
+}
+
+export interface AgentStatus {
+  phase: string
+  title: string
+  description: string
+  startedAt: number
 }
 
 export interface DiagnosisCase {

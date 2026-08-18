@@ -41,15 +41,20 @@ public sealed class AgentEvent
     public required string Type { get; init; }
     public string? Content { get; init; }
     public string? ActionId { get; init; }
+    public string? NodeId { get; init; }
     public object? Parameters { get; init; }
     public string? Reason { get; init; }
     public AgentGraphNode? Node { get; init; }
     public AgentGraphNodePatch? NodePatch { get; init; }
     public string? ExecutionId { get; init; }
+    public string? ActionState { get; init; }
     public object? Result { get; init; }
     public AgentEvidence? Evidence { get; init; }
     public string? MessageId { get; init; }
     public long? DurationMs { get; init; }
     public string? Code { get; init; }
     public string? Message { get; init; }
+    public string? Phase { get; init; }
+    public string? Title { get; init; }
+    public string? Description { get; init; }
 }
