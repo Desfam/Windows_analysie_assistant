@@ -11,6 +11,14 @@ namespace WindowsDiagnosticApp.Tests;
 
 public sealed class DiagnosticAgentServiceTests
 {
+    private sealed class FakeCapabilityDiscoveryService : ICapabilityDiscoveryService
+    {
+        public Task<SystemCapabilities> GetCapabilitiesAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult(new SystemCapabilities { IsAdministrator = false });
+        public Task WarmUpAsync() => Task.CompletedTask;
+        public void Invalidate() { }
+    }
+
     private sealed class FakeOllama : IOllamaService
     {
         private readonly Queue<List<ChatStreamChunk>> _turns;
@@ -47,6 +55,7 @@ public sealed class DiagnosticAgentServiceTests
 
     private static DiagnosticAgentService CreateAgent(IOllamaService ollama, IDiagnosticActionExecutor executor) =>
         new(ollama, new DiagnosticActionCatalog(Microsoft.Extensions.Options.Options.Create(new EventOptions())), executor,
+            new FakeCapabilityDiscoveryService(),
             NullLogger<DiagnosticAgentService>.Instance);
 
     private static ChatStreamChunk Delta(string text) => new() { Type = "delta", Content = text };

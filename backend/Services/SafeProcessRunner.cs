@@ -21,7 +21,11 @@ public sealed class SafeProcessRunner : ISafeProcessRunner
     private const int MaxCapturedCharacters = 64 * 1024;
     private static readonly HashSet<string> AllowedPrograms = new(StringComparer.OrdinalIgnoreCase)
     {
-        "winget.exe", "powershell.exe"
+        "winget.exe", "powershell.exe", "pwsh.exe",
+        "ipconfig.exe", "ping.exe", "nslookup.exe", "tracert.exe",
+        "netstat.exe", "netsh.exe", "net.exe", "sc.exe",
+        "tasklist.exe", "systeminfo.exe", "wevtutil.exe",
+        "chkdsk.exe", "fsutil.exe", "nltest.exe"
     };
 
     public async Task<ProcessExecutionDetails> RunAsync(SafeProcessRequest request, CancellationToken cancellationToken)

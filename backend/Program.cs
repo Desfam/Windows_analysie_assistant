@@ -56,6 +56,7 @@ builder.Services.AddSingleton<OllamaConfigStore>();
 builder.Services.AddSingleton<IOllamaService, OllamaService>();
 builder.Services.AddSingleton<DiagnosticActionCatalog>();
 builder.Services.AddSingleton<ISafeProcessRunner, SafeProcessRunner>();
+builder.Services.AddSingleton<ICapabilityDiscoveryService, CapabilityDiscoveryService>();
 builder.Services.AddSingleton<IDiagnosticActionExecutor, DiagnosticActionExecutor>();
 builder.Services.AddSingleton<IDiagnosticAgentService, DiagnosticAgentService>();
 
@@ -70,6 +71,10 @@ app.MapFrontend(sessionToken);
 
 app.Lifetime.ApplicationStarted.Register(() =>
 {
+    // Warm up capability discovery in the background so the first user request isn't blocked.
+    var capSvc = app.Services.GetRequiredService<ICapabilityDiscoveryService>();
+    _ = Task.Run(() => capSvc.WarmUpAsync());
+
     if (isTestHost)
     {
         return;

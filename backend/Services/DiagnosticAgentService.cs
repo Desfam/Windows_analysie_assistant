@@ -12,23 +12,26 @@ namespace WindowsDiagnosticApp.Services;
 /// </summary>
 public sealed class DiagnosticAgentService : IDiagnosticAgentService
 {
-    private const int MaxToolIterations = 3;
+    private const int MaxToolIterations = 8;  // Erhöht für mehrstufige Diagnosen
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
     private readonly IOllamaService _ollama;
     private readonly DiagnosticActionCatalog _catalog;
     private readonly IDiagnosticActionExecutor _executor;
+    private readonly ICapabilityDiscoveryService _capabilities;
     private readonly ILogger<DiagnosticAgentService> _logger;
 
     public DiagnosticAgentService(
         IOllamaService ollama,
         DiagnosticActionCatalog catalog,
         IDiagnosticActionExecutor executor,
+        ICapabilityDiscoveryService capabilities,
         ILogger<DiagnosticAgentService> logger)
     {
         _ollama = ollama;
         _catalog = catalog;
         _executor = executor;
+        _capabilities = capabilities;
         _logger = logger;
     }
 
@@ -42,7 +45,17 @@ public sealed class DiagnosticAgentService : IDiagnosticAgentService
         }
 
         var messages = BuildInitialMessages(request);
-        var tools = _catalog.BuildToolsPayload();
+        // Capabilities ermitteln, damit nur tatsächlich verfügbare Aktionen angeboten werden
+        SystemCapabilities capabilities;
+        try
+        {
+            capabilities = await _capabilities.GetCapabilitiesAsync(cancellationToken);
+        }
+        catch
+        {
+            capabilities = new SystemCapabilities();
+        }
+        var tools = _catalog.BuildToolsPayload(capabilities);
         var messageId = Guid.NewGuid().ToString("n");
         var iteration = 0;
 
@@ -189,8 +202,10 @@ public sealed class DiagnosticAgentService : IDiagnosticAgentService
         if (!validation.IsValid || validation.Definition is null)
         {
             var error = validation.Error ?? "Die angeforderte Aktion ist nicht zulässig.";
+            var errorCode = validation.ErrorCode ?? "INVALID_PARAMETER";
             yield return Error("invalid_tool_call", error);
-            messages.Add(BuildToolResultMessage(call.Name, JsonSerializer.Serialize(new { error }, JsonOptions)));
+            messages.Add(BuildToolResultMessage(call.Name,
+                JsonSerializer.Serialize(new { error, errorCode, status = "failed" }, JsonOptions)));
             yield break;
         }
 
@@ -405,6 +420,22 @@ public sealed class DiagnosticAgentService : IDiagnosticAgentService
 
         if (actionId != "events.query" || result.Data is not EventsQueryActionResult eventsResult)
         {
+            // Für alle anderen Aktionen mit EventsQueryActionResult (events.system.recent etc.)
+            if (result.Data is EventsQueryActionResult genericEventsResult)
+            {
+                foreach (var evt in genericEventsResult.Events)
+                {
+                    yield return new AgentEvidence
+                    {
+                        Id = $"evt-{actionId}-{evt.EventId}-{evt.Timestamp.ToUnixTimeSeconds()}",
+                        EventId = evt.EventId,
+                        Provider = evt.Provider,
+                        Summary = evt.Message,
+                        Timestamp = evt.Timestamp
+                    };
+                }
+            }
+
             yield break;
         }
 
